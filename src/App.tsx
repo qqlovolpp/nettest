@@ -4,7 +4,7 @@ import {
   Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine,
 } from 'recharts';
 import { NetworkProbe, DiagnosticResult, MonitorStats, MonitorStatus } from './types';
-import { runFullProbe, runDiagnostic, analyzeProbes } from './networkUtils';
+import { runFullProbe, runDiagnostic, analyzeProbes, detectProxy } from './networkUtils';
 
 const STORAGE_KEY = 'netdiag_probes';
 const MAX_PROBES = 500;
@@ -186,6 +186,7 @@ export default function App() {
   const [interval, setIntervalValue] = useState(10); // seconds
   const [diagnostics, setDiagnostics] = useState<DiagnosticResult[]>([]);
   const [isRunningDiag, setIsRunningDiag] = useState(false);
+  const [proxyInfo, setProxyInfo] = useState<{ hasProxy: boolean; proxyInfo: string } | null>(null);
   const [activeTab, setActiveTab] = useState<'chart' | 'diagnostic' | 'events'>('chart');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRunningRef = useRef(false);
@@ -225,6 +226,8 @@ export default function App() {
 
   const runDiagnostics = useCallback(async () => {
     setIsRunningDiag(true);
+    const proxy = await detectProxy();
+    setProxyInfo(proxy);
     const results = await runDiagnostic();
     const analysisResults = analyzeProbes(probes);
     setDiagnostics([...results, ...analysisResults]);
@@ -285,6 +288,11 @@ export default function App() {
     };
   }, []);
 
+  // Detect proxy on mount
+  useEffect(() => {
+    detectProxy().then(setProxyInfo);
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -320,6 +328,11 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
             <StatusBadge online={isOnline} />
+            {proxyInfo?.hasProxy && (
+              <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded-full border border-amber-200">
+                🔀 代理运行中
+              </span>
+            )}
             {status === 'running' && (
               <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
                 监控中 · 每{interval}秒
@@ -569,6 +582,23 @@ export default function App() {
           </div>
         </div>
 
+        {/* Proxy Notice */}
+        {proxyInfo?.hasProxy && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+            <h3 className="text-sm font-medium text-amber-800 mb-2">⚠️ 检测到 TUN 代理运行中</h3>
+            <div className="text-sm text-amber-700 space-y-1">
+              <p>{proxyInfo.proxyInfo}</p>
+              <p className="mt-2"><strong>重要提示：</strong>TUN 模式在系统层面接管所有流量，浏览器的所有请求都会经过代理。这意味着：</p>
+              <ul className="list-disc list-inside text-xs space-y-0.5 mt-1">
+                <li>测量到的延迟 = 真实网络延迟 + 代理处理延迟</li>
+                <li>无法区分"网络断了"还是"代理挂了"</li>
+                <li>速度测试结果受代理节点带宽限制</li>
+              </ul>
+              <p className="mt-2"><strong>建议：</strong>点击"运行诊断"，工具会通过多目标对比来帮你区分问题出在哪一层。</p>
+            </div>
+          </div>
+        )}
+
         {/* Help Section */}
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <h3 className="text-sm font-medium text-gray-700 mb-3">💡 使用指南</h3>
@@ -576,19 +606,25 @@ export default function App() {
             <div className="space-y-2">
               <p><strong>长时间监控：</strong>点击"开始监控"后，工具会按设定间隔自动探测网络。你可以将其保持在后台运行，数据会自动保存到浏览器本地。</p>
               <p><strong>查看趋势：</strong>在"趋势图表"标签中查看延迟、速度和连接状态的历史变化。</p>
-              <p><strong>运行诊断：</strong>点击"运行诊断"会立即检测DNS、多目标连通性等，并给出修复建议。</p>
+              <p><strong>运行诊断：</strong>点击"运行诊断"会立即检测DNS、多目标连通性等，并给出修复建议。工具会自动检测代理状态。</p>
             </div>
             <div className="space-y-2">
               <p><strong>问题定位：</strong></p>
               <ul className="list-disc list-inside space-y-1 text-xs">
-                <li>延迟高但不断连 → 可能是带宽不足或路由问题</li>
-                <li>频繁断连又恢复 → 可能是WiFi信号弱或路由器问题</li>
-                <li>完全断连 → 检查物理连接和ISP状态</li>
-                <li>延迟波动大 → 可能有设备在占用带宽</li>
-                <li>丢包率高 → 网线问题、WiFi干扰或ISP问题</li>
+                <li>直连OK + 代理失败 → 代理/节点问题</li>
+                <li>直连失败 + 代理OK → 真实网络问题</li>
+                <li>全部失败 → 物理连接/ISP问题</li>
+                <li>延迟波动大 → WiFi干扰/带宽占用/代理切换</li>
+                <li>丢包率高 → 网线/WiFi/代理节点/ISP</li>
+                <li>延迟高但不断连 → 带宽不足或路由问题</li>
               </ul>
             </div>
           </div>
+          {proxyInfo?.hasProxy && (
+            <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-500">
+              <strong>TUN 代理用户：</strong>如需测试真实网络质量，建议临时关闭 TUN 模式或使用规则模式（仅代理被墙网站），然后重新运行诊断。
+            </div>
+          )}
         </div>
       </main>
 
